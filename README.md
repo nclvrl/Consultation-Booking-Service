@@ -45,7 +45,7 @@ Validation failures return 400 with a fieldErrors list:
 Student JSON:
 
 ```json
-{ "id": 1, "studentId": "230001", "name": "Juan Dela Cruz", "email": "juan@student.ateneo.edu", "phoneNumber": "+639171234567" }
+{ "studentId": "230001", "name": "Juan Dela Cruz", "email": "juan@student.ateneo.edu", "phoneNumber": "+639171234567" }
 ```
 
 Deleting a student also cancels their BOOKED appointments (and re-evaluates those slots).
@@ -62,7 +62,7 @@ Deleting a student also cancels their BOOKED appointments (and re-evaluates thos
 Professor JSON:
 
 ```json
-{ "id": 1, "facultyId": "123456", "name": "Dr. Maria Santos", "email": "msantos@ateneo.edu", "phoneNumber": "+639181234567", "department": "Computer Science" }
+{ "facultyId": "100001", "name": "Dr. Maria Santos", "email": "msantos@ateneo.edu", "phoneNumber": "+639181234567", "department": "Computer Science" }
 ```
 
 ### C. Courses (CourseController → DirectoryService)
@@ -92,7 +92,7 @@ Course JSON:
 Section JSON:
 
 ```json
-{ "id": 1, "courseId": 1, "courseCode": "CSCI 180.05", "sectionCode": "O", "facultyId": 1, "schedule": "TF 3:30-5:00 PM" }
+{ "id": 1, "courseId": 1, "courseCode": "CSCI 180.05", "sectionCode": "O", "facultyId": "100001", "schedule": "TF 3:30-5:00 PM" }
 ```
 
 ### E. Consultation Slots (SlotController → ConsultationService)
@@ -107,7 +107,7 @@ Section JSON:
 Slot JSON:
 
 ```json
-{ "id": 1, "sectionId": 1, "facultyId": 1, "courseCode": "CSCI 180.05", "sectionCode": "O", "startTime": "2026-11-05T14:00:00", "durationMinutes": 30, "location": "CTC 215", "minStudents": 2, "maxStudents": 5,
+{ "id": 1, "sectionId": 1, "facultyId": "100001", "courseCode": "CSCI 180.05", "sectionCode": "O", "startTime": "2026-11-05T14:00:00", "durationMinutes": 30, "location": "CTC 215", "minStudents": 2, "maxStudents": 5,
  "bookedCount": 1, "status": "OPEN" }
 ```
 
@@ -123,7 +123,7 @@ Slot JSON:
 Appointment JSON:
 
 ```json
-{ "id": 1, "slotId": 1, "studentId": 1, "topic": "Springboot help", "status": "BOOKED", "bookedAt": "2026-10-30T09:15:00" }
+{ "id": 1, "slotId": 1, "studentId": "230001", "topic": "Springboot help", "status": "BOOKED", "bookedAt": "2026-10-30T09:15:00" }
 ```
 
 ## III. Components
@@ -204,7 +204,7 @@ createProfessor, createCourse, and the get/list/delete methods follow the same p
 
 | Field | Data Type | Nullable? | Validation Rules |
 |---|---|---|---|
-| studentId | String | No | @NotBlank, @Pattern(regexp="\\d{6}"), unique |
+| studentId | String | No | Primary key (assigned, not generated); @NotBlank, @Pattern(regexp="\\d{6}") |
 | name | String | No | @NotBlank, @Size(max=100) |
 | email | String | No | @NotBlank, @Email, unique |
 | phoneNumber | String | No | @NotBlank, @Pattern(regexp="\\+639\\d{9}") |
@@ -213,7 +213,7 @@ createProfessor, createCourse, and the get/list/delete methods follow the same p
 
 | Field | Data Type | Nullable? | Validation Rules |
 |---|---|---|---|
-| facultyId | String | No | @NotBlank, @Pattern(regexp="\\d{6}"), unique |
+| facultyId | String | No | Primary key (assigned, not generated); @NotBlank, @Pattern(regexp="\\d{6}") |
 | name | String | No | @NotBlank, @Size(max=100) |
 | email | String | No | @NotBlank, @Email, unique |
 | phoneNumber | String | No | @NotBlank, @Pattern(regexp="\\+639\\d{9}") |
@@ -243,7 +243,7 @@ createProfessor, createCourse, and the get/list/delete methods follow the same p
 |---|---|---|---|
 | id | Long | No | Generated |
 | section | Section (ManyToOne) | No | @NotNull; the professor and course are reached through the section |
-| startTime | LocalDateTime | No | @NotNull, @Future |
+| startTime | LocalDateTime | No | @NotNull; @Future is checked on the SlotRequest, not the entity, so status updates on a started slot are not rejected |
 | durationMinutes | int | No | @Min(15), @Max(120) |
 | location | String | No | @NotBlank, @Size(max=100) |
 | minStudents | int | No | @Min(2), default 2 |
@@ -262,7 +262,7 @@ createProfessor, createCourse, and the get/list/delete methods follow the same p
 | status | enum AppointmentStatus | No | BOOKED, CANCELLED |
 | bookedAt | LocalDateTime | No | Set by the service |
 
-Constraint: unique on (slot, student) among BOOKED rows
+Constraint: unique on (slot, student) among BOOKED rows (enforced in ConsultationService through checkDoubleBooking, since MySQL cannot enforce a unique constraint on only some rows)
 
 ## V. Repositories
 
@@ -292,29 +292,30 @@ Constraint: unique on (slot, student) among BOOKED rows
 |---|---|---|
 | existsByCourseIdAndSectionCode | Long courseId, String sectionCode | Duplicate check on create |
 | findByCourseId | Long courseId | Filter listing by course |
-| findByFacultyId | Long facultyId | Filter listing by professor |
+| findByProfessorFacultyId | String facultyId | Filter listing by professor |
 | existsByCourseId | Long courseId | Block deleting a course that has sections |
-| existsByFacultyId | Long facultyId | Block deleting a professor who teaches sections |
+| existsByProfessorFacultyId | String facultyId | Block deleting a professor who teaches sections |
 
 ### E. SlotRepository
 
 | Method | Parameters | Purpose |
 |---|---|---|
 | findByStatus | SlotStatus status | List slots by status |
-| findBySectionFacultyIdAndStatus | Long facultyId, SlotStatus status | Filter listing by professor |
+| findBySectionProfessorFacultyIdAndStatus | String facultyId, SlotStatus status | Filter listing by professor |
 | findBySectionCourseCodeAndStatus | String code, SlotStatus status | Filter listing by course |
 | findBySectionIdAndStatus | Long sectionId, SlotStatus status | Filter listing by section |
-| checkOverlap | Long facultyId, SlotStatus status, LocalDateTime to, LocalDateTime from | Overlap check on create |
+| checkOverlap | String facultyId, SlotStatus excludedStatus, LocalDateTime windowStart, LocalDateTime windowEnd | Overlap check on create: returns the professor's non-excluded slots starting inside the window (the service passes the new start minus 120 minutes and the new end, then keeps the slots whose end is after the new start) |
 | findByStatusAndStartTimeBefore | SlotStatus status, LocalDateTime cutoff | Scheduler: slots reaching the 24-hour cutoff |
 | findByReminderSentFalseAndStatusAndStartTimeBetween | SlotStatus status, LocalDateTime from, LocalDateTime to | Scheduler: slots needing reminders |
 | existsBySectionIdAndStatus | Long sectionId, SlotStatus status | Block deleting a section with active slots |
+| existsBySectionIdAndStatusNot | Long sectionId, SlotStatus status | Block deleting a section with non-cancelled slots (pass CANCELLED) |
 
 ### F. AppointmentRepository
 
 | Method | Parameters | Purpose |
 |---|---|---|
 | countBySlotIdAndStatus | Long slotId, AppointmentStatus status | Check min/max thresholds |
-| checkDoubleBooking | Long slotId, Long studentId, AppointmentStatus status | Prevent double booking |
+| checkDoubleBooking | Long slotId, String studentId, AppointmentStatus status | Prevent double booking (calls existsBySlotIdAndStudentStudentIdAndStatus) |
 | findBySlotIdAndStatus | Long slotId, AppointmentStatus status | Get students to notify |
-| findByStudentIdAndStatus | Long studentId, AppointmentStatus status | Student's bookings; cleanup on student delete |
+| findByStudentStudentIdAndStatus | String studentId, AppointmentStatus status | Student's bookings; cleanup on student delete |
 | findBySlotId | Long slotId | List appointments for a slot |
