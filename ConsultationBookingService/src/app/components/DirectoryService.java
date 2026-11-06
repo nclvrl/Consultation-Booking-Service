@@ -21,11 +21,9 @@ import app.repositories.ProfessorRepository;
 import app.repositories.SectionRepository;
 import app.repositories.SlotRepository;
 import app.repositories.StudentRepository;
-import app.rest.dto.AppointmentRequest;
 import app.rest.dto.CourseRequest;
 import app.rest.dto.ProfessorRequest;
 import app.rest.dto.SectionRequest;
-import app.rest.dto.SlotRequest;
 import app.rest.dto.StudentRequest;
 import app.rest.errorhandlers.BadRequestException;
 import app.rest.errorhandlers.ConflictException;
@@ -42,7 +40,6 @@ public class DirectoryService {
 	@Autowired private SectionRepository sectionRepo;
 	@Autowired private SlotRepository slotRepo;
 	@Autowired private AppointmentRepository appointmentRepo;
-	@Autowired private NotificationService notifier;
 
 
 	// STUDENTS ------------------------------------------------------------
@@ -182,129 +179,14 @@ public class DirectoryService {
 
 	// CONSULTATION SLOTS ------------------------------------------------------------
 
-	public ConsultationSlot createSlot(SlotRequest r) {
-		Section section = sectionRepo.findById(r.getSectionId())
-				.orElseThrow(() -> new NotFoundException("Section " + r.getSectionId() + " not found"));
-
-		if (r.getMaxStudents() < r.getMinStudents())
-			throw new BadRequestException("maxStudents must be >= minStudents");
-
-		// check for overlap with the professor's other non-cancelled slots
-		LocalDateTime start = r.getStartTime();
-		LocalDateTime end = start.plusMinutes(r.getDurationMinutes());
-		List<ConsultationSlot> existing = slotRepo
-				.findBySectionProfessorFacultyIdAndStatusNot(section.getProfessor().getFacultyId(), SlotStatus.CANCELLED);
-		for (ConsultationSlot other : existing) {
-			LocalDateTime otherEnd = other.getStartTime().plusMinutes(other.getDurationMinutes());
-			if (start.isBefore(otherEnd) && end.isAfter(other.getStartTime()))
-				throw new ConflictException("Overlaps with another slot of this professor");
-		}
-
-		ConsultationSlot slot = new ConsultationSlot();
-		slot.setSection(section);
-		slot.setStartTime(start);
-		slot.setDurationMinutes(r.getDurationMinutes());
-		slot.setLocation(r.getLocation());
-		slot.setMinStudents(r.getMinStudents());
-		slot.setMaxStudents(r.getMaxStudents());
-		slot.setStatus(SlotStatus.OPEN);
-		slot.setReminderSent(false);
-		return slotRepo.save(slot);
-	}
-
-	public List<ConsultationSlot> findSlots(String status) {
-		if (status == null || status.isBlank())
-			return slotRepo.findAll();
-		try {
-			return slotRepo.findByStatus(SlotStatus.valueOf(status.toUpperCase()));
-		} catch (IllegalArgumentException e) {
-			throw new BadRequestException("Invalid status: " + status);
-		}
-	}
-
-	public ConsultationSlot getSlot(Long id) {
-		return slotRepo.findById(id)
-				.orElseThrow(() -> new NotFoundException("Slot " + id + " not found"));
-	}
-
 	public int getBookedCount(Long slotId) {
 		return (int) appointmentRepo.countBySlotIdAndStatus(slotId, AppointmentStatus.BOOKED);
 	}
 
-	public void deleteSlot(Long id) {
-		ConsultationSlot slot = getSlot(id);
-
-		for (Appointment a : appointmentRepo.findBySlotIdAndStatus(id, AppointmentStatus.BOOKED)) {
-			a.setStatus(AppointmentStatus.CANCELLED);
-			appointmentRepo.save(a);
-			notifier.sendSms(a.getStudent().getPhoneNumber(),
-					"The consultation for " + describe(slot) + " has been cancelled.");
-		}
-		appointmentRepo.deleteAll(appointmentRepo.findBySlotId(id));
-		slotRepo.delete(slot);
-	}
-
 	// APPOINTMENTS ------------------------------------------------------------
 
-	public Appointment bookAppointment(Long slotId, AppointmentRequest r) {
-		ConsultationSlot slot = getSlot(slotId);
-		Student student = studentRepo.findById(r.getStudentId())
-				.orElseThrow(() -> new NotFoundException("Student " + r.getStudentId() + " not found"));
-
-		if (slot.getStatus() != SlotStatus.OPEN && slot.getStatus() != SlotStatus.CONFIRMED)
-			throw new ConflictException("Slot is not open for booking");
-		if (!slot.getStartTime().isAfter(LocalDateTime.now()))
-			throw new BadRequestException("Slot has already started");
-		if (appointmentRepo.existsBySlotIdAndStudentStudentIdAndStatus(slotId, student.getStudentId(), AppointmentStatus.BOOKED))
-			throw new ConflictException("Student already booked this slot");
-		if (getBookedCount(slotId) >= slot.getMaxStudents())
-			throw new ConflictException("Slot is full");
-
-		Appointment a = new Appointment();
-		a.setSlot(slot);
-		a.setStudent(student);
-		a.setTopic(r.getTopic());
-		a.setStatus(AppointmentStatus.BOOKED);
-		a.setBookedAt(LocalDateTime.now());
-		a = appointmentRepo.save(a);
-
-		int booked = getBookedCount(slotId);
-		Professor prof = slot.getSection().getProfessor();
-
-		if (booked == slot.getMinStudents() && slot.getStatus() == SlotStatus.OPEN) {
-			slot.setStatus(SlotStatus.CONFIRMED);
-			slotRepo.save(slot);
-			String msg = "Your consultation for " + describe(slot) + " is pushing through.";
-			for (Appointment b : appointmentRepo.findBySlotIdAndStatus(slotId, AppointmentStatus.BOOKED)) {
-				notifier.sendSms(b.getStudent().getPhoneNumber(), msg);
-			}
-			notifier.sendSms(prof.getPhoneNumber(),
-					"Your consultation for " + describe(slot) + " is confirmed (" + booked + " students).");
-		} else if (slot.getStatus() == SlotStatus.CONFIRMED) {
-			notifier.sendSms(student.getPhoneNumber(),
-					"Your booking for " + describe(slot) + " is confirmed.");
-		}
-		return a;
-	}
-
-	public List<Appointment> findAppointments(Long slotId) {
-		getSlot(slotId);
-		return appointmentRepo.findBySlotId(slotId);
-	}
-
-	public Appointment getAppointment(Long slotId, Long appointmentId) {
-		Appointment a = appointmentRepo.findById(appointmentId)
-				.orElseThrow(() -> new NotFoundException("Appointment " + appointmentId + " not found"));
-		if (!a.getSlot().getId().equals(slotId))
-			throw new NotFoundException("Appointment " + appointmentId + " not found in slot " + slotId);
-		return a;
-	}
-
-	public void cancelAppointment(Long slotId, Long appointmentId) {
-		cancelInternal(getAppointment(slotId, appointmentId));
-	}
-
-	//	cancelAppointment and deleteStudent both use the method below
+	
+	//	Canceling an appointment and deleteStudent can both use the method below
 	private void cancelInternal(Appointment a) {
 		if (a.getStatus() == AppointmentStatus.CANCELLED)
 			return;
@@ -321,18 +203,6 @@ public class DirectoryService {
 
 			slot.setStatus(SlotStatus.OPEN);
 			slotRepo.save(slot);
-
-			String msg = "The consultation for " + describe(slot)
-					+ " is no longer pushing through unless another student books.";
-			for (Appointment b : appointmentRepo.findBySlotIdAndStatus(slot.getId(), AppointmentStatus.BOOKED)) {
-				notifier.sendSms(b.getStudent().getPhoneNumber(), msg);
-			}
-			notifier.sendSms(slot.getSection().getProfessor().getPhoneNumber(), msg);
 		}
-	}
-
-	private String describe(ConsultationSlot slot) {
-		return slot.getSection().getCourse().getCode() + "-" + slot.getSection().getSectionCode()
-				+ " on " + slot.getStartTime() + " at " + slot.getLocation();
 	}
 }
