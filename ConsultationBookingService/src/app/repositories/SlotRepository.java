@@ -41,4 +41,6 @@ public interface SlotRepository extends JpaRepository<ConsultationSlot, Long> {
 
 	boolean existsBySectionIdAndStatusNot(Long sectionId, SlotStatus status);
 
+	List<ConsultationSlot> findBySectionProfessorFacultyIdAndStatusNot(String facultyId, SlotStatus cancelled);
+
 }

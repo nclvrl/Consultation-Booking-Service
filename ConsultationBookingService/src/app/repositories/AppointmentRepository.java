@@ -25,4 +25,6 @@ public interface AppointmentRepository extends JpaRepository<Appointment, Long> 
 
 	List<Appointment> findBySlotId(Long slotId);
 
+	Iterable<? extends Appointment> findByStudentStudentId(String studentId);
+
 }
